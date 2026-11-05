@@ -1,0 +1,1099 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>海平面气压场三维曲面模型（等压线图）</title>
+<style>
+  html,body{margin:0;padding:0;width:100%;height:100%;overflow:hidden;
+    font-family:"Microsoft YaHei","PingFang SC",sans-serif;background:#eef3f8;}
+  #side{position:fixed;top:0;left:0;bottom:0;width:330px;background:#fff;
+    border-right:1px solid #cdd8e4;box-shadow:2px 0 12px rgba(30,60,100,.10);
+    z-index:10;overflow-y:auto;padding:16px 16px 20px;box-sizing:border-box;}
+  #container{position:absolute;top:0;left:330px;right:0;height:100%;}
+  .panel{background:#f7fafd;border:1px solid #cdd8e4;
+    border-radius:10px;box-shadow:0 2px 8px rgba(30,60,100,.08);padding:10px 14px;margin-bottom:12px;}
+  #title h1{margin:0;font-size:17px;color:#1a3a5c;}
+  #ctrl{padding:10px 14px 2px;}
+  #ctrl label{font-size:13px;color:#1a3a5c;font-weight:bold;display:block;margin:8px 0 4px;}
+  #ctrl label:first-child{margin-top:0;}
+  #ctrl .val{float:right;color:#0f4c81;font-weight:normal;}
+  input[type=range]{width:100%;accent-color:#0f4c81;}
+  #planeBox{border-top:1px dashed #cdd8e4;margin-top:10px;padding-top:4px;}
+  .planeRow{display:flex;align-items:center;gap:6px;margin-top:7px;font-size:12px;color:#33475c;}
+  .planeRow .sw{width:13px;height:13px;border-radius:3px;flex:none;}
+  .planeRow input[type=range]{flex:1;min-width:0;}
+  .planeRow .hpa{width:118px;text-align:right;color:#1a3a5c;flex:none;}
+  .planeRow .chk{display:flex;align-items:center;gap:2px;flex:none;cursor:pointer;user-select:none;}
+  #modeBtns{margin-top:10px;display:flex;gap:8px;}
+  .btn{flex:1;padding:6px 0;border:1px solid #9fb6cc;border-radius:6px;background:#f4f8fc;
+    color:#1a3a5c;font-size:13px;cursor:pointer;user-select:none;text-align:center;}
+  .btn.active{background:#0f4c81;color:#fff;border-color:#0f4c81;}
+  #tooltip{position:fixed;display:none;pointer-events:none;background:rgba(20,45,75,.88);
+    color:#fff;font-size:12px;padding:4px 9px;border-radius:5px;z-index:20;white-space:nowrap;}
+  #legend{font-size:12px;color:#33475c;}
+  #legendBar{height:14px;border-radius:4px;border:1px solid #b9c6d4;margin-top:6px;
+    background:linear-gradient(to right,#2c7bb6,#abd9e9,#ffffbf,#fdae61,#d7191c);}
+  #legendTxt{display:flex;justify-content:space-between;margin-top:3px;}
+</style>
+</head>
+<body>
+<div id="container"></div>
+
+<div id="side">
+<div id="title" class="panel">
+  <h1>气压场三维曲面模型</h1>
+</div>
+
+<div id="legend" class="panel">
+  <b>气压 ↔ 高度 颜色对照</b>
+  <div id="legendBar"></div>
+  <div id="legendTxt"><span>低</span><span>高</span></div>
+</div>
+
+<div id="ctrl" class="panel">
+  <label>Z 轴高度 <span class="val" id="axVal">500 m</span></label>
+  <input type="range" id="axSlider" min="500" max="5000" step="100" value="500">
+
+  <label>曲面高度比例 <span class="val" id="hsVal">1.0</span></label>
+  <input type="range" id="hsSlider" min="0.2" max="6" step="0.1" value="1">
+
+  <label>模型整体高度（高低空模拟） <span class="val" id="offVal">0</span></label>
+  <input type="range" id="offSlider" min="0" max="1000" step="10" value="0">
+
+  <label>曲面之间间距 <span class="val" id="gapVal">1.0</span></label>
+  <input type="range" id="gapSlider" min="0.5" max="2.5" step="0.1" value="1">
+
+  <div id="planeBox">
+    <label>水平面高度（Z 轴，滑动调节）</label>
+    <div id="planeList"></div>
+    <div class="btn" id="btnCut" style="margin-top:9px;">隐藏等压线</div>
+    <div class="btn" id="btnSurf" style="margin-top:6px;">隐藏等压面</div>
+    <div class="btn" id="btnExtra" style="margin-top:6px;">隐藏附加等压面</div>
+  </div>
+
+  <div id="modeBtns">
+    <div class="btn active" id="btnView">🖱 旋转视角模式</div>
+    <div class="btn" id="btnLift">⬆ 抬升等压面模式</div>
+  </div>
+</div>
+</div>
+
+<div id="tooltip"></div>
+
+<script src="three.min.js"></script>
+<script>if(typeof THREE==='undefined')document.write('<script src="https://cdnjs.cloudflare.com/ajax/libs/three.js/r128/three.min.js"><\/script>');</script>
+<script src="OrbitControls.js"></script>
+<script>if(typeof THREE.OrbitControls==='undefined')document.write('<script src="https://cdn.jsdelivr.net/npm/three@0.128.0/examples/js/controls/OrbitControls.js"><\/script>');</script>
+<script>
+/* ================= 1. 依据等压线图重建气压场 ================= */
+const P_MIN = 1000.0, P_MAX = 1015.0;
+const MAP = 100;                                     // 图幅 100×100
+
+function G(x, y, cx, cy, s){
+  const dx = x - cx, dy = y - cy;
+  return Math.exp(-(dx*dx + dy*dy) / (2*s*s));
+}
+function rawField(x, y){
+  let p = 1007.5;
+  p += 5.0 * G(x, y,  7,  8, 15);        // 西北角高压
+  p += 8.0 * G(x, y, 93,  8, 13);        // 东北角高压（最强 1015）
+  p += 5.5 * G(x, y, 57, 92, 19);        // 中南部高压
+  p -= 8.0 * G(x, y, 28, 55, 11);        // 西南部低压
+  p -= 6.5 * G(x, y, 47, 20, 10);        // 北部低压
+  p -= 3.0 * G(x, y,100, 78, 11);        // 东南角低压区
+  return p;
+}
+let fmin = 1e9, fmax = -1e9;
+for(let j=0;j<=100;j++) for(let i=0;i<=100;i++){
+  const v = rawField(i, j);
+  if(v<fmin) fmin=v; if(v>fmax) fmax=v;
+}
+function pressureAt(x, y){
+  const v = rawField(x, y);
+  return P_MIN + (v - fmin) / (fmax - fmin) * (P_MAX - P_MIN);
+}
+/* 高度→气压换算：1格=10米，标准压高公式 p=p0·(1-2.25577e-5·h)^5.25588 */
+const M_PER_UNIT = 10;
+function pressureAtAltitude(pSea){
+  const h = modelOffset * M_PER_UNIT;
+  return Math.max(0, pSea * Math.pow(1 - 2.25577e-5*h, 5.25588));
+}
+
+/* ================= 2. 网格采样（加密提高交线精度） ================= */
+const N = 200;
+const gridP = [];
+for(let j=0;j<=N;j++){
+  const row=[];
+  for(let i=0;i<=N;i++) row.push(pressureAt(i/N*MAP, j/N*MAP));
+  gridP.push(row);
+}
+
+/* ================= 3. 颜色映射（蓝→青→黄→红，低→高） ================= */
+const stops = [
+  [0.00, 0x2c7bb6],[0.25, 0xabd9e9],[0.50, 0xffffbf],
+  [0.75, 0xfdae61],[1.00, 0xd7191c]
+];
+function colorOf(t){
+  t = Math.max(0, Math.min(1, t));
+  for(let k=0;k<stops.length-1;k++){
+    const [t0,c0]=stops[k],[t1,c1]=stops[k+1];
+    if(t<=t1){
+      const f=(t-t0)/(t1-t0);
+      const r=((c0>>16)&255)+(((c1>>16)&255)-((c0>>16)&255))*f;
+      const g=((c0>>8)&255)+(((c1>>8)&255)-((c0>>8)&255))*f;
+      const b=(c0&255)+((c1&255)-(c0&255))*f;
+      return [r/255,g/255,b/255];
+    }
+  }
+  return [1,0,0];
+}
+
+/* ================= 4. 场景结构 =================
+ * modelGroup（整体高度可升降，模拟高低空）
+ *   └ surfaceGroup（scale.y = 高度比例；内部 y = 气压-1000）
+ *        ├ 曲面 mesh
+ *        ├ 水平面 planes[i]（position.y = 层次气压-1000）
+ *        └ 交线 planeLines[i]
+ * 文字标签挂在 scene 上，手动计算 y，避免精灵被非均匀缩放拉伸
+ */
+const container = document.getElementById('container');
+const scene = new THREE.Scene();
+scene.background = new THREE.Color(0xeef3f8);
+scene.fog = new THREE.Fog(0xeef3f8, 280, 520);
+
+const camera = new THREE.PerspectiveCamera(45, container.clientWidth/container.clientHeight, 1, 900);
+camera.position.set(190, 130, 190);
+
+const renderer = new THREE.WebGLRenderer({antialias:true});
+renderer.setSize(container.clientWidth, container.clientHeight);
+renderer.setPixelRatio(Math.min(devicePixelRatio, 2));
+container.appendChild(renderer.domElement);
+
+const controls = new THREE.OrbitControls(camera, renderer.domElement);
+controls.target.set(50, 18, -50);
+controls.enableDamping = true;
+controls.dampingFactor = 0.08;
+controls.enablePan = false;
+controls.minDistance = 60;
+controls.maxDistance = 450;
+controls.maxPolarAngle = Math.PI * 0.49;
+
+scene.add(new THREE.AmbientLight(0xffffff, 0.65));
+const dir1 = new THREE.DirectionalLight(0xffffff, 0.75);
+dir1.position.set(120, 160, 60);
+scene.add(dir1);
+const dir2 = new THREE.DirectionalLight(0xdfeaff, 0.3);
+dir2.position.set(-80, 60, -100);
+scene.add(dir2);
+
+const modelGroup = new THREE.Group();
+scene.add(modelGroup);
+const surfaceGroup = new THREE.Group();
+modelGroup.add(surfaceGroup);
+const cutGroup = new THREE.Group();       // 全部“水平面 ∩ 曲面”交线（水平气压场）
+modelGroup.add(cutGroup);
+let heightScale = 2.0;
+let modelOffset = 0;
+
+/* ---- 曲面 ---- */
+const geo = new THREE.PlaneGeometry(MAP, MAP, N, N);
+geo.rotateX(-Math.PI/2);                    // (x, y) → (x, 0, -y)
+const pos = geo.attributes.position;
+const colors = new Float32Array(pos.count*3);
+for(let j=0;j<=N;j++){
+  for(let i=0;i<=N;i++){
+    const idx = j*(N+1)+i;
+    const p = gridP[j][i];
+    pos.setY(idx, p - P_MIN);
+    const c = colorOf((p-P_MIN)/(P_MAX-P_MIN));
+    colors[idx*3]=c[0]; colors[idx*3+1]=c[1]; colors[idx*3+2]=c[2];
+  }
+}
+geo.setAttribute('color', new THREE.BufferAttribute(colors,3));
+geo.computeVertexNormals();
+const surface = new THREE.Mesh(geo, new THREE.MeshStandardMaterial({
+  vertexColors:true, side:THREE.DoubleSide, roughness:0.62, metalness:0.05,
+  polygonOffset:true, polygonOffsetFactor:1.5, polygonOffsetUnits:1.5  // 让交线精确贴面不闪
+}));
+surface.position.set(MAP/2, 0, -MAP/2);
+surfaceGroup.add(surface);
+
+/* ---- 地面参考网格：固定在最底部不随模型移动，但随轴高同步缩放 ---- */
+const gridHelper = new THREE.GridHelper(MAP, 10, 0xb9c6d4, 0xd7e0ea);
+gridHelper.position.set(50, -0.15, -50);
+scene.add(gridHelper);
+
+/* ---- X-Y-Z 坐标轴（Z 轴为垂直高度轴；原点固定，不随模型升降） ---- */
+const axesGroup = new THREE.Group();
+scene.add(axesGroup);                    // 挂在场景上：调节模型整体高度时原点不动
+
+/* 文字精灵工厂（返回精灵，便于按轴高缩放/销毁） */
+function makeTextSprite(text, colorHex, size){
+  const cv=document.createElement('canvas'); cv.width=cv.height=128;
+  const ctx=cv.getContext('2d');
+  ctx.font='bold 54px Consolas, monospace';
+  ctx.textAlign='center'; ctx.textBaseline='middle';
+  ctx.lineWidth=9; ctx.strokeStyle='rgba(255,255,255,0.94)';
+  ctx.strokeText(text,64,66);
+  ctx.fillStyle=colorHex; ctx.fillText(text,64,66);
+  const sp=new THREE.Sprite(new THREE.SpriteMaterial({
+    map:new THREE.CanvasTexture(cv), depthTest:false, transparent:true
+  }));
+  sp.scale.set(size, size, 1);
+  sp.renderOrder = 11;
+  return sp;
+}
+const AX_LEN = 118;
+/* X（东）、Y（北）固定长度；Z 为可变高度轴 */
+[[1,0,0,0xd63333,'X'],[0,0,-1,0x2e9e4f,'Y']].forEach(([x,y,z,color,name])=>{
+  const dir = new THREE.Vector3(x,y,z);
+  axesGroup.add(new THREE.ArrowHelper(dir, new THREE.Vector3(0,0,0), AX_LEN, color, 7, 3.5));
+  const sp = makeTextSprite(name, '#'+color.toString(16).padStart(6,'0'), 6.5);
+  sp.position.copy(dir.clone().multiplyScalar(AX_LEN+8));
+  axesGroup.add(sp);
+});
+const zArrow = new THREE.ArrowHelper(new THREE.Vector3(0,1,0), new THREE.Vector3(0,0,0),
+  100, 0x1f6fb4, 7, 3.5);
+axesGroup.add(zArrow);
+const zNameSprite = makeTextSprite('Z', '#1f6fb4', 6.5);
+axesGroup.add(zNameSprite);
+axesGroup.add(new THREE.Mesh(
+  new THREE.SphereGeometry(1.3,16,16),
+  new THREE.MeshBasicMaterial({color:0x333333})
+));
+
+/* ---- Z 轴高度：单位 1 格 = 10 米，轴高可在 0.5～5 km 之间调整 ---- */
+let axisMaxM = 1000;                     // 当前轴高（米）
+const zTickGroup = new THREE.Group();
+axesGroup.add(zTickGroup);
+
+function niceStepM(spanM, target){
+  const raw = spanM/target, cands=[10,20,25,50,100,200,250,500,1000];
+  for(const c of cands) if(c >= raw) return c;
+  return 1000;
+}
+function clearGroup(g){
+  while(g.children.length){
+    const c = g.children.pop();
+    if(c.material){
+      if(c.material.map) c.material.map.dispose();
+      c.material.dispose();
+    }
+    if(c.geometry) c.geometry.dispose();
+  }
+}
+function buildZAxis(){
+  /* axesGroup 已按 k=轴高/1km 统一缩放：局部坐标恒定，箭头/字与 X/Y 轴完全一致 */
+  const L  = 100;                                // 局部轴长（放大 k 后恰为 axisMaxM/10）
+  zArrow.setLength(L, 7, 3.5);                   // 箭头头部与 X/Y 轴同尺寸
+  zNameSprite.scale.set(6.5, 6.5, 1);
+  zNameSprite.position.set(0, L + 8, 0);
+
+  clearGroup(zTickGroup);
+  const step = niceStepM(axisMaxM, 5);
+  for(let m=step; m<=axisMaxM+1e-6; m+=step){
+    const y = L * m / axisMaxM;                  // 归一化刻度位置
+    zTickGroup.add(new THREE.Line(
+      new THREE.BufferGeometry().setFromPoints([
+        new THREE.Vector3(0,y,0), new THREE.Vector3(6,y,0)
+      ]),
+      new THREE.LineBasicMaterial({color:0x1f6fb4})
+    ));
+    const sp = makeTextSprite(m>=1000 ? (m/1000)+'km' : m+'m', '#1f6fb4', 6.2);
+    sp.position.set(11.5, y, 0);
+    zTickGroup.add(sp);
+  }
+}
+
+/* ================= 5. 精确交线：逐三角面与水平面求交 =================
+ * 直接对渲染所用的三角面做平面切割，交线在数学上就是"曲面与平面的交线"，
+ * 不再依赖气压网格近似，因此与曲面上看到的切割边界严格重合。
+ */
+const geoIndex = geo.index.array;
+const geoPos   = geo.attributes.position;
+const _pa=new THREE.Vector3(), _pb=new THREE.Vector3(), _pc=new THREE.Vector3();
+
+function vertexAt(i, out){
+  out.set(geoPos.getX(i), geoPos.getY(i), geoPos.getZ(i));
+  return out;
+}
+/* levelY：几何局部空间的水平面高度。返回局部坐标线段 [[x1,z1],[x2,z2]]
+ * 通用版本：可对任意曲面几何（主曲面 / 4 层附加曲面）求交 */
+function intersectGeo(g, levelY){
+  const idx = g.index.array, pos = g.attributes.position;
+  const segs=[];
+  const L = levelY + 1e-6;                 // 微偏移，避免顶点恰好落在面上
+  const cut=(p,q,vp,vq)=>{
+    const t=vp/(vp-vq);
+    return [p.x+(q.x-p.x)*t, p.z+(q.z-p.z)*t];
+  };
+  for(let k=0;k<idx.length;k+=3){
+    _pa.fromBufferAttribute(pos, idx[k]);
+    _pb.fromBufferAttribute(pos, idx[k+1]);
+    _pc.fromBufferAttribute(pos, idx[k+2]);
+    const va=_pa.y-L, vb=_pb.y-L, vc=_pc.y-L;
+    const sa=va>0, sb=vb>0, sc=vc>0;
+    if(sa===sb && sb===sc) continue;       // 整片在面之上或之下
+    const pts=[];
+    if(sa!==sb) pts.push(cut(_pa,_pb,va,vb));
+    if(sb!==sc) pts.push(cut(_pb,_pc,vb,vc));
+    if(sc!==sa) pts.push(cut(_pc,_pa,vc,va));
+    if(pts.length===2) segs.push(pts);
+  }
+  return segs;
+}
+/* 主曲面沿用旧接口 */
+function intersectTriangles(levelY){ return intersectGeo(geo, levelY); }
+/* 将线段链接为连续曲线（闭合环自动识别） */
+function chainsFromSegments(segs){
+  const keyMap=new Map(), pts=[], adj=[];
+  const idOf=p=>{
+    const k=Math.round(p[0]*1000)+','+Math.round(p[1]*1000);
+    let i=keyMap.get(k);
+    if(i===undefined){ i=pts.length; keyMap.set(k,i); pts.push(p); }
+    return i;
+  };
+  segs.forEach(([p,q])=>{
+    const a=idOf(p), b=idOf(q);
+    if(a===b) return;
+    (adj[a]=adj[a]||[]).push(b);
+    (adj[b]=adj[b]||[]).push(a);
+  });
+  const used=new Set(), chains=[];
+  for(let s=0;s<pts.length;s++){
+    if(used.has(s)||!adj[s]) continue;
+    const chain=[s]; used.add(s);
+    let cur=s;
+    while(true){
+      const nxt=(adj[cur]||[]).find(n=>!used.has(n));
+      if(nxt===undefined) break;
+      used.add(nxt); chain.push(nxt); cur=nxt;
+    }
+    cur=chain[0];
+    while(true){
+      const prv=(adj[cur]||[]).find(n=>!used.has(n));
+      if(prv===undefined) break;
+      used.add(prv); chain.unshift(prv); cur=prv;
+    }
+    if(chain.length>=3){
+      const line=chain.map(i=>pts[i]);
+      const d=Math.hypot(line[0][0]-line[line.length-1][0],
+                         line[0][1]-line[line.length-1][1]);
+      chains.push({pts:line, closed:d<1.2});
+    }
+  }
+  return chains;
+}
+
+/* ================= 6. 可调水平面 + 交线（管状实体交线） ================= */
+const PLANE_COLORS = [0x1f6fb4, 0x2e9e4f, 0xd97706, 0x8e44ad, 0xc2185b];
+const PLANE_HEX    = ['#1f6fb4', '#2e9e4f', '#d97706', '#8e44ad', '#c2185b'];
+const planes = [];        // {level, mesh, line, lineMat, faceOn, lineOn, row}
+let globalPlanesOn=true, globalLinesOn=true;
+
+function applyPlaneVisible(idx){
+  const p=planes[idx];
+  p.mesh.visible = p.faceOn && globalPlanesOn;
+  p.line.visible = p.lineOn && globalLinesOn;   // 面与线完全独立显隐
+  extraCut.forEach(g=>g.visible = globalLinesOn);   // 附加曲面交线跟随同一开关
+}
+function refreshPlaneRow(idx){
+  const r=planes[idx].row;
+  r.rng.value=planes[idx].level;
+  const pa = pressureAtAltitude(planes[idx].level - modelOffset*10).toFixed(0);
+  r.hpa.textContent = planes[idx].level.toFixed(0)+' m ≈ '+pa+' hPa';   // 高度 + 估算气压
+}
+/* 轴越高，相机越远；线宽/文字随之放大，保证远看仍清晰 */
+function viewScale(){ return Math.max(1, Math.min(5, axisMaxM/1000)); }
+/* 交线气压值标签（画布宽度按文字自适应，高度 size 个世界单位） */function makeCutLabel(text, colorHex, size){
+  const cv=document.createElement('canvas');
+  let ctx=cv.getContext('2d');
+  ctx.font='bold 54px Consolas, monospace';
+  const w=Math.ceil(ctx.measureText(text).width)+26;
+  cv.width=w; cv.height=84;
+  ctx=cv.getContext('2d');                     // 改变画布尺寸后需重取
+  ctx.font='bold 54px Consolas, monospace';
+  ctx.textAlign='center'; ctx.textBaseline='middle';
+  ctx.lineWidth=9; ctx.strokeStyle='rgba(255,255,255,0.94)';
+  ctx.strokeText(text, w/2, 44);
+  ctx.fillStyle=colorHex; ctx.fillText(text, w/2, 44);
+  const sp=new THREE.Sprite(new THREE.SpriteMaterial({
+    map:new THREE.CanvasTexture(cv), depthTest:false, transparent:true
+  }));
+  sp.scale.set(size*w/84, size, 1);
+  sp.renderOrder = 12;
+  return sp;
+}
+/* 逐三角面切割 → 链接成曲线 → 细管实体（中心严格落在相交处）
+   labelText：交线对应的气压估算值（贴在链上最靠近观察者的点） */
+function fillCurves(group, chains, mat, labelText){
+  while(group.children.length){
+    const c=group.children.pop();
+    c.geometry.dispose();
+  }
+  /* 管半径/标签取局部常量：随 modelGroup 缩放 k 后，世界尺寸与轴高成正比，观感恒定 */
+  const R = 0.18;
+  chains.forEach(ch=>{
+    const v3=ch.pts.map(q=>new THREE.Vector3(q[0],0,q[1]));
+    if(ch.closed) v3.push(v3[0].clone());
+    const curve=new THREE.CatmullRomCurve3(v3, ch.closed, 'centripetal');
+    const tubular=Math.min(Math.max(v3.length*2, 32), 700);
+    const geo2=new THREE.TubeGeometry(curve, tubular, R, 6, ch.closed);
+    const m=new THREE.Mesh(geo2, mat);
+    m.renderOrder = 2;                           // 在半透明平面之后绘制，色彩不被冲淡
+    group.add(m);
+  });
+  if(labelText){
+    const S = 3.4, hex='#'+mat.color.getHexString();
+    chains.forEach(ch=>{
+      let best=ch.pts[0];
+      ch.pts.forEach(q=>{ if(q[0]+q[1] > best[0]+best[1]) best=q; });  // x+z 最大 = 最靠近观察者
+      const sp=makeCutLabel(labelText, hex, S);
+      sp.position.set(best[0], 1.4, best[1]);
+      sp.userData.text = labelText;               // 便于外部读取校验
+      group.add(sp);
+    });
+  }
+}
+/* 标准大气换算：海拔 h（米）→ 气压（hPa），对流层公式
+   p = 1013.25 × (1 − 2.25577e-5·h)^5.2559，海平面 1013.25、500 m≈954.6、1 km≈898.7、2.8 km≈719.3 */
+function pressureAtAltitude(h){
+  h = Math.max(0, h);
+  return 1013.25 * Math.pow(1 - 2.25577e-5*h, 5.2559);
+}
+function setPlaneLevel(idx, altM){
+  const p=planes[idx];
+  altM = Math.max(0, Math.min(axisMaxM, altM));   // Z 轴上的绝对高度（米），不随模型升降
+  p.level=altM;
+  const k = axisMaxM/1000;                        // 轴高缩放系数（modelGroup/axesGroup 同步放大）
+  const localY = (altM/M_PER_UNIT - modelOffset) / k;   // modelGroup 局部高度（格）
+  p.mesh.position.set(MAP/2, localY, -MAP/2);
+  p.line.position.set(MAP/2, localY, -MAP/2);     // 世界高度 = k·localY + modelOffset = altM/10
+  /* 曲面纵向被 heightScale·k 拉伸，几何局部切割高度需除回 */
+  const Lloc = localY / heightScale;
+  /* 由高度估算气压（标准大气，越高越低）：h = 平面绝对高度 − 模型整体高度
+     （模型整体高度 = 等压面组所在海拔，抬高它 → 同一观察面相对更靠近底部 → 气压升高）；
+     附加等压面比主面高 gap·(s+1)，其交线气压依次再减 gap */
+  const pMain = pressureAtAltitude(altM - modelOffset*M_PER_UNIT);
+  fillCurves(p.line, chainsFromSegments(intersectGeo(geo, Lloc)), p.lineMat,
+             pMain.toFixed(1)+' hPa');
+  /* 同一水平面与 4 层附加曲面的交线（构成“等压线”的全部等值线） */
+  if(cutOn){
+    extraCut.forEach((g,s)=>{
+      g.position.set(MAP/2, localY, -MAP/2);
+      const pEst = Math.max(0, pMain - extraGap*(s+1));
+      fillCurves(g, chainsFromSegments(intersectGeo(extraMeshes[s].geometry, Lloc)),
+                 g.userData.mat, pEst.toFixed(1)+' hPa');
+    });
+  }
+  refreshPlaneRow(idx);
+  updateZSlider();                               // 场景内 Z 轴滑块同步
+}
+function buildPlaneRow(idx){
+  const row=document.createElement('div');
+  row.className='planeRow';
+  row.innerHTML =
+    '<span class="sw" style="background:'+PLANE_HEX[idx]+'"></span>'+
+    '<input type="range" min="0" max="1000" step="10" value="'+planes[idx].level+'">'+
+    '<span class="hpa"></span>'+
+    '<label class="chk"><input type="checkbox" checked>面</label>'+
+    '<label class="chk"><input type="checkbox" checked>线</label>';
+  const rng=row.children[1], hpa=row.children[2],
+        chkFace=row.children[3].children[0], chkLine=row.children[4].children[0];
+  rng.addEventListener('input', ()=>setPlaneLevel(idx, parseFloat(rng.value)));
+  chkFace.addEventListener('change', ()=>{
+    planes[idx].faceOn=chkFace.checked; applyPlaneVisible(idx);
+  });
+  chkLine.addEventListener('change', ()=>{
+    planes[idx].lineOn=chkLine.checked; applyPlaneVisible(idx);
+  });
+  planes[idx].row={rng,hpa,chkFace,chkLine};
+  return row;
+}
+function makePlane(idx, level){
+  const mesh = new THREE.Mesh(
+    new THREE.PlaneGeometry(MAP, MAP),
+    new THREE.MeshBasicMaterial({
+      color:PLANE_COLORS[idx], transparent:true, opacity:0.09,
+      side:THREE.DoubleSide, depthWrite:false
+    })
+  );
+  mesh.rotation.x = -Math.PI/2;
+  mesh.position.set(MAP/2, level/M_PER_UNIT, -MAP/2);
+  mesh.renderOrder = 1;
+  const line = new THREE.Group();              // 交线容器（内部为细管实体）
+  line.position.set(MAP/2, 0, -MAP/2);         // 与曲面几何对齐（setPlaneLevel 会更新高度）
+  const lineMat = new THREE.MeshBasicMaterial({color:PLANE_COLORS[idx]});
+  modelGroup.add(mesh); cutGroup.add(line);    // 面在 modelGroup，交线归入 cutGroup（可整体开关）
+  planes.push({level, mesh, line, lineMat, faceOn:true, lineOn:true, row:null});
+  const row=buildPlaneRow(idx);
+  document.getElementById('planeList').appendChild(row);
+  setPlaneLevel(idx, level);
+  applyPlaneVisible(idx);
+}
+/* 只保留一个水平面：拖动滑杆 / 场景内 Z 轴滑块在竖直方向升降其高度
+   （实例化放在 6c 段之后，保证 Z 轴滑块已就绪） */
+
+/* ================= 6b. 曲面上方 4 层平行曲面（间距可调，互不相交） ================= */
+const extraGroup = new THREE.Group();
+surfaceGroup.add(extraGroup);
+const extraMeshes = [];
+let extraOn = true;
+let extraGap = 5;                 // 层间距（hPa），滑块可调 1～20
+const EXTRA_COLORS = [0x3f7fd6, 0x2f9e6e, 0xc08a2e, 0xa25a9e];
+/* 共用同一随机起伏场：4 层曲面互相严格平行，任意位置都恰好相差 gap 的整数倍。
+   起伏幅度随间距收缩（≤ 0.35·gap），保证差值恒为正 → 任意间距都不可能相交 */
+const NOISE_SEED = 1.7;
+function sharedNoise(x, z){
+  const A = Math.min(1.1, extraGap * 0.35);
+  return A * (Math.sin(x*0.055 + NOISE_SEED*1.9) * 0.6
+            + Math.cos(z*0.048 - NOISE_SEED*2.7) * 0.4);
+}
+function buildExtraSurfaces(){
+  for(let s=0;s<4;s++){
+    const g = new THREE.PlaneGeometry(MAP, MAP, 64, 64);
+    g.rotateX(-Math.PI/2);
+    const pos = g.attributes.position;
+    for(let k=0;k<pos.count;k++){
+      const mapX = pos.getX(k) + MAP/2;
+      const mapY = pos.getZ(k) + MAP/2;   // 与主曲面同一映射：地图 y = 几何 z + 50
+      const base = pressureAt(mapX, mapY) - P_MIN;
+      pos.setY(k, base + extraGap*(s+1) + sharedNoise(mapX, mapY));
+    }
+    g.computeVertexNormals();
+    const m = new THREE.Mesh(g, new THREE.MeshStandardMaterial({
+      color: EXTRA_COLORS[s], transparent:true, opacity:0.30,
+      side:THREE.DoubleSide, depthWrite:false, roughness:0.75, metalness:0.05
+    }));
+    m.position.set(MAP/2, 0, -MAP/2);
+    m.renderOrder = 1;
+    extraGroup.add(m);
+    extraMeshes.push(m);
+  }
+}
+buildExtraSurfaces();
+
+const btnExtra = document.getElementById('btnExtra');
+function extraBtnText(){
+  return (extraOn?'隐藏':'显示')+'附加等压面';
+}
+function setExtraOn(v){
+  extraOn = v;
+  extraGroup.visible = v;
+  btnExtra.textContent = extraBtnText();
+  btnExtra.classList.toggle('active', v);
+}
+btnExtra.addEventListener('click', ()=>setExtraOn(!extraOn));
+setExtraOn(false);         // 默认隐藏附加等压面
+
+/* 间距滑块：重建 4 层曲面（共用同一噪声，任意间距都不会相交），并重算交线 */
+function rebuildExtraSurfaces(){
+  while(extraMeshes.length){
+    const m = extraMeshes.pop();
+    extraGroup.remove(m);
+    m.geometry.dispose(); m.material.dispose();
+  }
+  buildExtraSurfaces();
+  extraGroup.visible = extraOn;
+  btnExtra.textContent = extraBtnText();
+  if(planes.length) setPlaneLevel(0, planes[0].level);
+}
+function setExtraGap(g){
+  extraGap = Math.max(0.5, Math.min(2.5, g));
+  gapVal.textContent = extraGap.toFixed(1);
+  gapSlider.value = extraGap;
+  rebuildExtraSurfaces();
+}
+
+/* ---- 水平气压场：水平面 ∩ 所有曲面的交线（主曲面 + 4 层附加曲面） ---- */
+let cutOn = true;
+const extraCut = [];            // 每层附加曲面的交线容器
+for(let s=0;s<4;s++){
+  const g = new THREE.Group();
+  g.position.set(MAP/2, 0, -MAP/2);
+  g.userData.mat = new THREE.MeshBasicMaterial({color: EXTRA_COLORS[s]});
+  cutGroup.add(g);
+  extraCut.push(g);
+}
+const btnCut = document.getElementById('btnCut');
+function setCutOn(v){
+  cutOn = v;
+  cutGroup.visible = v;
+  btnCut.textContent = (v?'隐藏':'显示')+'等压线';
+  btnCut.classList.toggle('active', v);
+  if(v && planes.length) setPlaneLevel(0, planes[0].level);   // 打开时补算附加曲面交线
+  if(planes.length) applyPlaneVisible(0);
+}
+btnCut.addEventListener('click', ()=>setCutOn(!cutOn));
+
+/* ---- 主曲面显示 / 隐藏 ---- */
+const btnSurf = document.getElementById('btnSurf');
+let surfOn = true;
+function setSurfOn(v){
+  surfOn = v;
+  surface.visible = v;
+  btnSurf.textContent = (v?'隐藏':'显示')+'等压面';
+  btnSurf.classList.toggle('active', v);
+}
+btnSurf.addEventListener('click', ()=>setSurfOn(!surfOn));
+
+/* ================= 6c. 装在 Z 轴上的拖动滑块（直接升降水平面） =================
+ * 轨道即 Z 轴本身：白色半透明滑轨套在轴身上，蓝色手柄沿轴滑动；
+ * 高度读数显示在手柄左侧，Z 轴自带的刻度即量尺（1 格 = 10 米）。
+ * 拖动手柄 → 换算成世界高度 → 反解出米数 → setPlaneLevel，面板滑杆同步。
+ */
+const ZS_X = 0;                // 轨道就在 Z 轴上（x=0, z=0）
+let   zsSpan = 1000;           // 量程（米）= 当前 Z 轴高度
+const ZS_STEP = 10;            // 步长（1 格 = 10 米）
+let   zsVs = 1;                // 视觉比例（轴越高，手柄与文字越大）
+
+const zsGroup = new THREE.Group();
+scene.add(zsGroup);            // 挂 scene：不随模型升降被拉伸
+
+/* 滑轨：半透明白色圆杆套在 Z 轴上（顶端留出箭头），保持原样 */
+const zsTrack = new THREE.Mesh(
+  new THREE.CylinderGeometry(1.7, 1.7, 1, 12),
+  new THREE.MeshBasicMaterial({color:0xffffff, transparent:true, opacity:0.5, depthTest:false})
+);
+zsTrack.renderOrder = 16;
+zsGroup.add(zsTrack);
+
+/* 轨道两端小圆头：深蓝色、半径 0.85（原 1.7 的一半），滑轨本体不变 */
+const zsCapMat = new THREE.MeshBasicMaterial({color:0x0d3b73, transparent:true, opacity:0.85, depthTest:false});
+const zsCaps = [0, 1].map(()=>{
+  const cap = new THREE.Mesh(new THREE.SphereGeometry(0.85, 12, 10), zsCapMat);
+  cap.renderOrder = 16; zsGroup.add(cap);
+  return cap;
+});
+zsCaps[1].visible = false;               // 不显示轨道顶端圆点
+
+/* 不可见加粗圆柱：扩大鼠标抓取范围 */
+const zsPick = new THREE.Mesh(
+  new THREE.CylinderGeometry(5, 5, 1, 10),
+  new THREE.MeshBasicMaterial({transparent:true, opacity:0, depthWrite:false})
+);
+zsGroup.add(zsPick);
+
+/* 手柄：蓝色光圈 + 深蓝色圆球（拖动/悬停时变色） */
+const zsHaloMat = new THREE.MeshBasicMaterial({color:0x1f6fb4, depthTest:false, transparent:true, opacity:0.9});
+const zsHalo = new THREE.Mesh(new THREE.SphereGeometry(1.95, 20, 14), zsHaloMat);
+zsHalo.renderOrder = 18;
+zsGroup.add(zsHalo);
+const zsHandleMat = new THREE.MeshBasicMaterial({color:0x0d3b73, depthTest:false});
+const zsHandle = new THREE.Mesh(new THREE.SphereGeometry(1.3, 20, 14), zsHandleMat);
+zsHandle.renderOrder = 19;
+zsGroup.add(zsHandle);
+
+/* 手柄旁的读数精灵：高度 + 该高度估算气压（两行） */
+const zsCv = document.createElement('canvas');
+zsCv.width = 256; zsCv.height = 128;
+const zsCtx = zsCv.getContext('2d');
+const zsTex = new THREE.CanvasTexture(zsCv);
+const zsLabel = new THREE.Sprite(new THREE.SpriteMaterial({
+  map:zsTex, depthTest:false, transparent:true
+}));
+zsLabel.scale.set(21, 10.5, 1);
+zsLabel.renderOrder = 20;
+zsGroup.add(zsLabel);
+function drawZsLabel(m){
+  const txt = m >= 1000 ? (m/1000).toFixed(m % 1000 ? 1 : 0) + ' km' : m.toFixed(0) + ' m';
+  const pa  = pressureAtAltitude(m - modelOffset*M_PER_UNIT).toFixed(0) + ' hPa';
+  zsCtx.clearRect(0, 0, 256, 128);
+  zsCtx.textAlign = 'center'; zsCtx.textBaseline = 'middle';
+  zsCtx.lineWidth = 9; zsCtx.strokeStyle = 'rgba(255,255,255,0.96)';
+  zsCtx.font = 'bold 44px Consolas, monospace';
+  zsCtx.strokeText(txt, 128, 36);
+  zsCtx.fillStyle = '#0f4c81'; zsCtx.fillText(txt, 128, 36);
+  zsCtx.font = 'bold 36px Consolas, monospace';
+  zsCtx.strokeText(pa, 128, 94);
+  zsCtx.fillStyle = '#0d3b73'; zsCtx.fillText(pa, 128, 94);
+  zsTex.needsUpdate = true;
+}
+
+let zsDragging = false, zsHover = false;
+const zsWorldY = m => m / M_PER_UNIT;   // 米 → Z 轴绝对高度（平面不随模型升降）
+
+function updateZSlider(){
+  zsVs = Math.max(0.8, (zsSpan / M_PER_UNIT) / 80);
+  const y0 = zsWorldY(0), y1 = zsWorldY(zsSpan);
+  const L = Math.max(0.001, y1 - y0 - 7*zsVs);   // 顶端留出 Z 轴箭头
+  zsTrack.scale.set(zsVs, L, zsVs);
+  zsTrack.position.set(ZS_X, y0 + L/2, 0);
+  zsPick.scale.set(zsVs, Math.max(0.001, y1-y0), zsVs);
+  zsPick.position.set(ZS_X, (y0 + y1) / 2, 0);
+  zsCaps[0].position.set(ZS_X, y0, 0);
+  zsCaps[1].position.set(ZS_X, y0 + L, 0);
+  zsCaps.forEach(c=>c.scale.setScalar(zsVs));
+  zsHalo.scale.setScalar(zsVs);
+  zsHandle.scale.setScalar(zsVs);
+
+  const altM = planes.length ? planes[0].level : 0;
+  const yh = zsWorldY(altM);
+  zsHandle.position.set(ZS_X, yh, 0);
+  zsHalo.position.set(ZS_X, yh, 0);
+  zsLabel.scale.set(21 * zsVs, 7.9 * zsVs, 1);
+  zsLabel.position.set(ZS_X - 15 * zsVs, yh, 0);
+  drawZsLabel(altM);
+  zsHandleMat.color.setHex(zsDragging ? 0xd63333 : (zsHover ? 0x2a6db5 : 0x0d3b73));
+}
+
+/* 鼠标 → 世界高度：求视线与竖直直线的最近点（避免与视线方向有关的退化） */
+const _w = new THREE.Vector3();
+function zsHeightAt(cx, cy){
+  const rc = renderer.domElement.getBoundingClientRect();
+  mouse.x = ((cx - rc.left) / rc.width) * 2 - 1;
+  mouse.y = -((cy - rc.top) / rc.height) * 2 + 1;
+  raycaster.setFromCamera(mouse, camera);
+  const o = raycaster.ray.origin, d = raycaster.ray.direction;
+  _w.set(o.x - ZS_X, o.y, o.z);
+  const dd = d.lengthSq(), du = d.y;
+  const t = (_w.y * du - d.dot(_w)) / Math.max(1e-6, dd - du * du);
+  return _w.y + t * du;
+}
+function zsHitTest(e){
+  const rc = renderer.domElement.getBoundingClientRect();
+  mouse.x = ((e.clientX - rc.left) / rc.width) * 2 - 1;
+  mouse.y = -((e.clientY - rc.top) / rc.height) * 2 + 1;
+  raycaster.setFromCamera(mouse, camera);
+  return raycaster.intersectObjects([zsPick, zsHandle], false).length > 0;
+}
+function zsDragTo(e){
+  let altM = zsHeightAt(e.clientX, e.clientY) * M_PER_UNIT;   // 视线与轨道交点的绝对高度
+  altM = Math.round(Math.max(0, Math.min(zsSpan, altM)) / ZS_STEP) * ZS_STEP;
+  setPlaneLevel(0, altM);
+}
+
+/* 轴高变化时，把各控件量程与滑块刻度一起同步 */
+function applyAxisRange(){
+  zsSpan = axisMaxM;
+  planes.forEach((p,i)=>{
+    p.row.rng.max = axisMaxM;
+    if(p.level > axisMaxM) setPlaneLevel(i, axisMaxM);
+    else setPlaneLevel(i, p.level);      // 重建交线，线宽按新视距调整
+  });
+  offSlider.max = axisMaxM;
+  if(modelOffset * M_PER_UNIT > axisMaxM) setModelOffsetM(axisMaxM);
+  updateLabelHeights();
+  updateZSlider();
+}
+
+/* 相机按轴高重新取景：模型随 k 缩放，dist=2.6L 保证任意轴高下构图自相似 */
+function fitView(){
+  const k = axisMaxM/1000;
+  const L = Math.max(axisMaxM / M_PER_UNIT, 40);
+  const dist = L * 2.6;
+  const dir = camera.position.clone().sub(controls.target).normalize();
+  const ty = L * 0.42;
+  controls.target.set(50*k, ty, -50*k);          // 对准放大后的模型中心
+  camera.position.copy(controls.target).add(dir.multiplyScalar(dist));
+  controls.maxDistance = dist * 1.8;
+  controls.minDistance = L * 0.2;
+  camera.far = Math.max(900, dist * 3.2);
+  camera.updateProjectionMatrix();
+  scene.fog.near = dist * 0.95;
+  scene.fog.far  = dist * 1.85;
+  controls.update();
+}
+
+/* 现在再实例化唯一的那一个水平面，此时 Z 轴滑块已就绪（默认 0 m，等压线隐藏） */
+makePlane(0, 0);
+setCutOn(false);
+setSurfOn(true);
+
+/* ================= 7. 文字标签（精确对应地形特征） ================= */
+const labelSprites=[]; let labelsOn=true;
+function makeLabel(text, x, y, pLevel){
+  const cv=document.createElement('canvas');
+  cv.width=cv.height=128;
+  const ctx=cv.getContext('2d');
+  ctx.beginPath(); const r=26;
+  ctx.moveTo(20+r,20); ctx.arcTo(108,20,108,108,r); ctx.arcTo(108,108,20,108,r);
+  ctx.arcTo(20,108,20,20,r); ctx.arcTo(20,20,108,20,r); ctx.closePath();
+  ctx.fillStyle='rgba(255,255,255,0.9)'; ctx.fill();
+  ctx.strokeStyle='#33475c'; ctx.lineWidth=3; ctx.stroke();
+  ctx.fillStyle = text==='高' ? '#b01818' : text==='低' ? '#1450a0' : '#222';
+  ctx.font='bold 64px "Microsoft YaHei",sans-serif';
+  ctx.textAlign='center'; ctx.textBaseline='middle';
+  ctx.fillText(text, 64, 68);
+  const sp=new THREE.Sprite(new THREE.SpriteMaterial({
+    map:new THREE.CanvasTexture(cv), depthTest:false
+  }));
+  sp.scale.set(5.2,5.2,1);
+  sp.userData={x,y, level:pLevel};    // pLevel：标签贴在等压线（槽/脊）上时的高度
+  sp.renderOrder=10;
+  scene.add(sp);
+  labelSprites.push(sp);
+}
+/* 从网格中检测真实的极大/极小值位置，保证标签落在高/低中心 */
+function findExtrema(sign, count){
+  const R=9, cand=[];
+  for(let j=R;j<N-R;j++)for(let i=R;i<N-R;i++){
+    const v=gridP[j][i]*sign; let ok=true;
+    for(let dj=-R;dj<=R&&ok;dj++)for(let di=-R;di<=R;di++){
+      if(gridP[j+dj][i+di]*sign > v+1e-9){ok=false;break;}
+    }
+    if(ok) cand.push({v,i,j});
+  }
+  cand.sort((a,b)=>b.v-a.v);
+  const picked=[];
+  for(const c of cand){
+    if(picked.every(p=>Math.hypot(p.i-c.i,p.j-c.j)>30)){
+      picked.push(c);
+      if(picked.length===count) break;
+    }
+  }
+  return picked.map(c=>[c.i/N*MAP, c.j/N*MAP]);
+}
+const highs = findExtrema( 1, 3);   // 三个高压中心
+const lows  = findExtrema(-1, 2);   // 两个低压中心
+const saddle1 = [(lows[0][0]+lows[1][0])/2, (lows[0][1]+lows[1][1])/2];      // 两低之间
+const saddle2 = [(highs[0][0]+highs[1][0])/2, (highs[0][1]+highs[1][1])/2];  // 东北高与中南部高之间
+
+/* ---- 槽与脊：等压线自低压/高压中心向外凸出最远的方向 ----
+ * 从中心向 72 个方向测量“气压变化达到 1.5 hPa 的距离”R(θ)：
+ * R 最大的方向 = 等压线离中心最远处 = 外凸曲线上的点（低压→槽，高压→脊）。
+ * 标签贴在该等压线上，并沿此方向画虚线（低压槽线/高压脊线）。
+ */
+const ridTrGroup = new THREE.Group();     // 槽线/脊线（虚线，随曲面高度自动起伏）
+surfaceGroup.add(ridTrGroup);
+
+/* 中心沿外凸方向到图幅边界的虚线（贴着曲面起伏） */
+function addDashedAxis(center, bulge, colorHex){
+  let dx=bulge[0]-center[0], dy=bulge[1]-center[1];
+  const len=Math.hypot(dx,dy);
+  if(len<1e-3) return;
+  dx/=len; dy/=len;
+  const pts=[];
+  for(let t=3; t<=140; t+=1.5){
+    const mx=center[0]+dx*t, my=center[1]+dy*t;
+    if(mx<0||mx>MAP||my<0||my>MAP) break;
+    /* 几何局部坐标：x = mapX-50, z = mapY-50 */
+    pts.push(new THREE.Vector3(mx-50, pressureAt(mx,my)-P_MIN+0.4, my-50));
+  }
+  if(pts.length<2) return;
+  const ln=new THREE.Line(
+    new THREE.BufferGeometry().setFromPoints(pts),
+    new THREE.LineDashedMaterial({color:colorHex, dashSize:2.2, gapSize:1.6,
+      transparent:true, opacity:0.85})
+  );
+  ln.computeLineDistances();
+  ridTrGroup.add(ln);
+}
+/* 射线扫描：返回外凸方向 {dx,dy,R}，R=达到 dDelta 变化的距离 */
+function bulgeDirection(center, sign, dDelta){
+  const p0 = pressureAt(center[0], center[1]);
+  let best=null;
+  for(let k=0;k<72;k++){
+    const th=k/72*Math.PI*2, dx=Math.cos(th), dy=Math.sin(th);
+    let R=0;
+    for(let t=1;t<=160;t+=0.5){
+      const mx=center[0]+dx*t, my=center[1]+dy*t;
+      if(mx<0||mx>MAP||my<0||my>MAP){ R=t*0.6; break; }  // 出图按 0.6 折算，避免标签贴边
+      if((pressureAt(mx,my)-p0)*sign >= dDelta){ R=t; break; }
+    }
+    if(!best || R>best.R) best={dx,dy,R};
+  }
+  return best;
+}
+/* 对每个中心：外凸方向 → 标签 + 虚线 */
+function annotateCenters(centers, sign, text, maxCount){
+  centers.slice(0, maxCount).forEach(c=>{
+    const b = bulgeDirection(c, sign, 1.5);
+    if(!b || b.R < 4) return;
+    const bx=c[0]+b.dx*b.R, by=c[1]+b.dy*b.R;
+    makeLabel(text, bx, by, pressureAt(bx,by));           // 标签贴在外凸等压线上
+    addDashedAxis(c, [bx,by], text==='槽' ? 0x1450a0 : 0xb01818);
+  });
+}
+/* 按"不显示高低/脊槽标注"需求，标签与虚线的生成调用已移除（函数保留备用） */
+
+function updateLabelHeights(){
+  const k = viewScale();
+  labelSprites.forEach(sp=>{
+    const {x,y,level}=sp.userData;
+    const p = (level!==undefined) ? level : pressureAt(x,y);
+    const off = (level!==undefined ? 3.0 : 3.5) * k;   // 槽/脊标签贴在等压线上
+    /* 地图 y 对应世界 z = y-100（北 y=0 在远端 z=-100，与曲面渲染一致） */
+    sp.position.set(x, modelOffset + (p-P_MIN)*heightScale + off, y - 100);
+    sp.scale.set(5.2*k, 5.2*k, 1);
+    sp.visible = labelsOn;
+  });
+  ridTrGroup.visible = labelsOn;                        // 槽线/脊线随标签一起显隐
+}
+
+/* ================= 8. 控件与交互 ================= */
+const slider=document.getElementById('hsSlider'), hsVal=document.getElementById('hsVal');
+const offSlider=document.getElementById('offSlider'), offVal=document.getElementById('offVal');
+const axSlider=document.getElementById('axSlider'), axVal=document.getElementById('axVal');
+const gapSlider=document.getElementById('gapSlider'), gapVal=document.getElementById('gapVal');
+const tooltip=document.getElementById('tooltip');
+let mode='view', adjusting=false, lastY=0;
+
+function setHeightScale(v){
+  heightScale=Math.max(0.2, Math.min(6, v));
+  surfaceGroup.scale.y=heightScale;
+  slider.value=heightScale; hsVal.textContent=heightScale.toFixed(1);
+  updateLabelHeights();
+  planes.forEach((p,i)=>setPlaneLevel(i, p.level));   // 曲面纵向比例变了，交线需重算
+  updateZSlider();
+}
+/* 整体高度以“米”为单位输入，内部仍用格（1 格 = 10 米） */
+function setModelOffsetM(m){
+  m = Math.max(0, Math.min(axisMaxM, m));
+  modelOffset = m / M_PER_UNIT;
+  modelGroup.position.y = modelOffset;
+  offVal.textContent = m + ' m';
+  offSlider.value = m;
+  updateLabelHeights();
+  updateZSlider();                      // 滑块随模型整体平移
+  planes.forEach((p,i)=>setPlaneLevel(i, p.level));   // 模型抬高后，交线与气压估算同步重算
+}
+/* Z 轴高度（0.5～5 km）：模型与坐标轴按 k=轴高/1km 同步放大，取景自相似 */
+function setAxisMax(m){
+  axisMaxM = Math.max(500, Math.min(5000, m));
+  const k = axisMaxM/1000;
+  modelGroup.scale.setScalar(k);        // 曲面范围随轴同步增大
+  axesGroup.scale.setScalar(k);         // X/Y/Z 轴随模型同步放大，箭头规格一致
+  gridHelper.scale.setScalar(k);        // 网格随轴缩放（位置固定在最底部）
+  axVal.textContent = axisMaxM >= 1000 ? (axisMaxM/1000) + ' km' : axisMaxM + ' m';
+  axSlider.value = axisMaxM;
+  buildZAxis();
+  applyAxisRange();
+  fitView();
+}
+slider.addEventListener('input', ()=>setHeightScale(parseFloat(slider.value)));
+offSlider.addEventListener('input', ()=>setModelOffsetM(parseFloat(offSlider.value)));
+axSlider.addEventListener('input', ()=>setAxisMax(parseFloat(axSlider.value)));
+gapSlider.addEventListener('input', ()=>setExtraGap(parseFloat(gapSlider.value)));
+
+/* 键盘控制 */
+window.addEventListener('keydown', e=>{
+  if(/INPUT|SELECT|TEXTAREA/.test(e.target.tagName)) return;
+  const k=e.key.toLowerCase();
+  if(k==='l'){ labelsOn=!labelsOn; updateLabelHeights(); }
+  else if(k==='p'){
+    globalPlanesOn=!globalPlanesOn;
+    planes.forEach((p,i)=>{
+      p.row.chkFace.checked=globalPlanesOn;
+      p.faceOn=globalPlanesOn; applyPlaneVisible(i);
+    });
+  }
+  else if(k==='k'){
+    globalLinesOn=!globalLinesOn;
+    planes.forEach((p,i)=>{
+      p.row.chkLine.checked=globalLinesOn;
+      p.lineOn=globalLinesOn; applyPlaneVisible(i);
+    });
+  }
+  else if(e.key==='ArrowUp'){ e.preventDefault(); setModelOffsetM(modelOffset*M_PER_UNIT + 50); }
+  else if(e.key==='ArrowDown'){ e.preventDefault(); setModelOffsetM(modelOffset*M_PER_UNIT - 50); }
+  else if(k==='s'){ setExtraOn(!extraOn); }
+  else if(k==='h'){ setCutOn(!cutOn); }
+  else if(k==='c'){ setSurfOn(!surfOn); }
+});
+
+const btnView=document.getElementById('btnView'), btnLift=document.getElementById('btnLift');
+function setMode(m){
+  mode=m;
+  btnView.classList.toggle('active', m==='view');
+  btnLift.classList.toggle('active', m==='lift');
+  controls.enableRotate = (m==='view');
+}
+btnView.addEventListener('click', ()=>setMode('view'));
+btnLift.addEventListener('click', ()=>setMode('lift'));
+
+const dom=renderer.domElement;
+dom.addEventListener('contextmenu', e=>e.preventDefault());
+dom.addEventListener('pointerdown', e=>{
+  /* 1) 优先判定是否抓住 Z 轴滑块 */
+  if(e.button===0 && zsHitTest(e)){
+    zsDragging=true; zsHover=true;
+    controls.enabled=false;          // 整个手势期间关闭轨道控制，避免同时旋转视角
+    try{ dom.setPointerCapture(e.pointerId); }catch(_){}
+    dom.style.cursor='ns-resize';
+    zsDragTo(e);
+    updateZSlider();
+    e.preventDefault();
+    return;
+  }
+  /* 2) 抬升模式 / 右键 / Shift */
+  if(mode==='lift' || e.button===2 || e.shiftKey){
+    adjusting=true; lastY=e.clientY;
+    controls.enableRotate=false;
+    try{ dom.setPointerCapture(e.pointerId); }catch(_){}
+  }
+});
+dom.addEventListener('pointermove', e=>{
+  if(zsDragging){ zsDragTo(e); return; }
+  const over = zsHitTest(e);
+  if(over !== zsHover){
+    zsHover = over;
+    dom.style.cursor = over ? 'ns-resize' : '';
+    updateZSlider();
+    if(over){ tooltip.style.display='none'; }
+  }
+  if(adjusting){
+    const dy=e.clientY-lastY; lastY=e.clientY;
+    setHeightScale(heightScale + dy*(-0.012));
+  }
+  hoverReadout(e);
+});
+dom.addEventListener('pointerup', ()=>{
+  if(zsDragging){
+    zsDragging=false;
+    controls.enabled=true;
+    controls.enableRotate=(mode==='view');
+    dom.style.cursor = zsHover ? 'ns-resize' : '';
+    updateZSlider();
+    return;
+  }
+  if(adjusting){ adjusting=false; controls.enableRotate=(mode==='view'); }
+});
+
+/* ---- 悬停读取气压值 ---- */
+const raycaster=new THREE.Raycaster();
+const mouse=new THREE.Vector2();
+function hoverReadout(e){
+  const rc = renderer.domElement.getBoundingClientRect();
+  mouse.x=((e.clientX - rc.left)/rc.width)*2-1;
+  mouse.y=-((e.clientY - rc.top)/rc.height)*2+1;
+  raycaster.setFromCamera(mouse, camera);
+  const objs = extraOn ? [surface].concat(extraMeshes) : [surface];
+  const hit = raycaster.intersectObjects(objs, false)[0];
+  if(hit && hit.object === surface){
+    const x=hit.point.x, my=hit.point.z + 100;   // 世界 z → 地图 y（北 y=0 在 z=-100）
+    if(x>=0&&x<=MAP&&my>=0&&my<=MAP){
+      const pSea=pressureAt(x,my);
+      const pLev=pressureAtAltitude(pSea);   // 按标准压高公式换算本层气压
+      tooltip.style.display='block';
+      tooltip.style.left=(e.clientX+14)+'px';
+      tooltip.style.top=(e.clientY+10)+'px';
+      tooltip.textContent='本层气压：'+pLev.toFixed(1)+' hPa｜海平面：'
+        +pSea.toFixed(1)+' hPa｜高度：'+(modelOffset*M_PER_UNIT)+' m';
+      return;
+    }
+  }
+  tooltip.style.display='none';
+}
+dom.addEventListener('pointerleave', ()=>{tooltip.style.display='none';});
+
+/* ================= 9. 渲染循环 ================= */
+addEventListener('resize', ()=>{
+  camera.aspect=container.clientWidth/container.clientHeight;
+  camera.updateProjectionMatrix();
+  renderer.setSize(container.clientWidth, container.clientHeight);
+});
+setHeightScale(1.0);
+setModelOffsetM(0);
+setExtraGap(1);
+setAxisMax(500);           // 最后统一建轴、同步量程并取景
+setPlaneLevel(0, 0);
+(function animate(){
+  requestAnimationFrame(animate);
+  controls.update();
+  renderer.render(scene, camera);
+})();
+</script>
+</body>
+</html>

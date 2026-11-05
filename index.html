@@ -33,7 +33,7 @@
     color:#fff;font-size:12px;padding:4px 9px;border-radius:5px;z-index:20;white-space:nowrap;}
   #legend{font-size:12px;color:#33475c;}
   #legendBar{height:14px;border-radius:4px;border:1px solid #b9c6d4;margin-top:6px;
-    background:linear-gradient(to right,#2c7bb6,#abd9e9,#ffffbf,#fdae61,#d7191c);}
+    background:linear-gradient(to right,#d7191c,#fdae61,#abd9e9,#1e90ff);}
   #legendTxt{display:flex;justify-content:space-between;margin-top:3px;}
 </style>
 </head>
@@ -131,8 +131,8 @@ for(let j=0;j<=N;j++){
 
 /* ================= 3. 颜色映射（蓝→青→黄→红，低→高） ================= */
 const stops = [
-  [0.00, 0x2c7bb6],[0.25, 0xabd9e9],[0.50, 0xffffbf],
-  [0.75, 0xfdae61],[1.00, 0xd7191c]
+  [0.00, 0x1e90ff],[0.33, 0xabd9e9],[0.67, 0xfdae61],
+  [1.00, 0xd7191c]
 ];
 function colorOf(t){
   t = Math.max(0, Math.min(1, t));
@@ -206,7 +206,7 @@ for(let j=0;j<=N;j++){
     const idx = j*(N+1)+i;
     const p = gridP[j][i];
     pos.setY(idx, p - P_MIN);
-    const c = colorOf((p-P_MIN)/(P_MAX-P_MIN));
+    const c = colorOf(1 - (p-P_MIN)/(P_MAX-P_MIN));   // 颜色反相：蓝=高、红=低
     colors[idx*3]=c[0]; colors[idx*3+1]=c[1]; colors[idx*3+2]=c[2];
   }
 }
@@ -401,7 +401,7 @@ function applyPlaneVisible(idx){
 function refreshPlaneRow(idx){
   const r=planes[idx].row;
   r.rng.value=planes[idx].level;
-  const pa = pressureAtAltitude(planes[idx].level - modelOffset*10).toFixed(0);
+  const pa = pressureAtAltitude(planes[idx].level).toFixed(0);
   r.hpa.textContent = planes[idx].level.toFixed(0)+' m ≈ '+pa+' hPa';   // 高度 + 估算气压
 }
 /* 轴越高，相机越远；线宽/文字随之放大，保证远看仍清晰 */
@@ -472,10 +472,9 @@ function setPlaneLevel(idx, altM){
   p.line.position.set(MAP/2, localY, -MAP/2);     // 世界高度 = k·localY + modelOffset = altM/10
   /* 曲面纵向被 heightScale·k 拉伸，几何局部切割高度需除回 */
   const Lloc = localY / heightScale;
-  /* 由高度估算气压（标准大气，越高越低）：h = 平面绝对高度 − 模型整体高度
-     （模型整体高度 = 等压面组所在海拔，抬高它 → 同一观察面相对更靠近底部 → 气压升高）；
+  /* 由高度估算气压（标准大气，越高越低）：按平面在 Z 轴上的绝对高度换算；
      附加等压面比主面高 gap·(s+1)，其交线气压依次再减 gap */
-  const pMain = pressureAtAltitude(altM - modelOffset*M_PER_UNIT);
+  const pMain = pressureAtAltitude(altM);
   fillCurves(p.line, chainsFromSegments(intersectGeo(geo, Lloc)), p.lineMat,
              pMain.toFixed(1)+' hPa');
   /* 同一水平面与 4 层附加曲面的交线（构成“等压线”的全部等值线） */
@@ -698,7 +697,7 @@ zsLabel.renderOrder = 20;
 zsGroup.add(zsLabel);
 function drawZsLabel(m){
   const txt = m >= 1000 ? (m/1000).toFixed(m % 1000 ? 1 : 0) + ' km' : m.toFixed(0) + ' m';
-  const pa  = pressureAtAltitude(m - modelOffset*M_PER_UNIT).toFixed(0) + ' hPa';
+  const pa  = pressureAtAltitude(m).toFixed(0) + ' hPa';
   zsCtx.clearRect(0, 0, 256, 128);
   zsCtx.textAlign = 'center'; zsCtx.textBaseline = 'middle';
   zsCtx.lineWidth = 9; zsCtx.strokeStyle = 'rgba(255,255,255,0.96)';
